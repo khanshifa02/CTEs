@@ -1,0 +1,120 @@
+Dummy Database for practice with Common Table Expression
+
+-- Create database
+CREATE DATABASE ClinicalClaimsDB;
+GO
+USE ClinicalClaimsDB;
+
+-- Create Patients table
+CREATE TABLE Patients (
+    patient_id INT PRIMARY KEY,
+    birth_date DATE,
+    gender CHAR(1)
+);
+
+INSERT INTO Patients (patient_id, birth_date, gender) VALUES
+(1, '1980-05-10', 'M'),
+(2, '1975-08-20', 'F'),
+(3, '1990-11-30', 'M');
+
+-- Create Encounters table
+CREATE TABLE Encounters (
+    encounter_id INT PRIMARY KEY,
+    patient_id INT,
+    encounter_date DATE,
+    FOREIGN KEY (patient_id) REFERENCES Patients(patient_id)
+);
+
+INSERT INTO Encounters (encounter_id, patient_id, encounter_date) VALUES
+(101, 1, '2023-01-10'),
+(102, 2, '2023-03-15'),
+(103, 3, '2023-06-18');
+
+-- Create Diagnoses table
+CREATE TABLE Diagnoses (
+    diagnosis_id INT PRIMARY KEY,
+    encounter_id INT,
+    condition_code VARCHAR(10),
+    FOREIGN KEY (encounter_id) REFERENCES Encounters(encounter_id)
+);
+
+INSERT INTO Diagnoses (diagnosis_id, encounter_id, condition_code) VALUES
+(201, 101, 'E11'),  -- Diabetes
+(202, 102, 'E11'),  -- Diabetes
+(203, 103, 'E11');  -- Diabetes
+
+-- Create Medications table
+CREATE TABLE Medications (
+    medication_id INT PRIMARY KEY,
+    encounter_id INT,
+    medication_name VARCHAR(50),
+    start_date DATE,
+    end_date DATE,
+    FOREIGN KEY (encounter_id) REFERENCES Encounters(encounter_id)
+);
+
+INSERT INTO Medications (medication_id, encounter_id, medication_name, start_date, end_date) VALUES
+(301, 101, 'Metformin', '2023-01-12', '2023-01-25'),
+(302, 102, 'Insulin', '2023-03-16', '2023-03-30'),
+(303, 103, 'Metformin', '2023-06-20', '2023-07-05');
+
+-- Create Claims table
+CREATE TABLE Claims (
+    claim_id INT PRIMARY KEY,
+    patient_id INT,
+    claim_date DATE,
+    amount DECIMAL(10, 2),
+    FOREIGN KEY (patient_id) REFERENCES Patients(patient_id)
+);
+
+INSERT INTO Claims (claim_id, patient_id, claim_date, amount) VALUES
+(401, 1, '2023-02-05', 150.75),
+(402, 2, '2023-04-01', 200.50),
+(403, 3, '2023-08-01', 125.00);
+
+
+---CTE--
+WITH DiabeticPatients AS (
+    SELECT DISTINCT p.patient_id
+    FROM Patients p
+    JOIN Diagnoses d ON p.patient_id = d.encounter_id  -- Fixed to correctly join on encounter_id
+    WHERE d.condition_code = 'E11' -- ICD-10 code for Type 2 Diabetes
+),
+
+TreatmentPeriods AS (
+    SELECT 
+        e.patient_id,
+        m.start_date AS treatment_start,
+        m.end_date AS treatment_end,
+        ROW_NUMBER() OVER (PARTITION BY e.patient_id ORDER BY m.start_date) AS treatment_row_num -- Adding row number for each treatment
+    FROM Encounters e
+    JOIN Medications m ON e.encounter_id = m.encounter_id
+    WHERE e.patient_id IN (SELECT patient_id FROM DiabeticPatients)
+),
+
+TreatmentGaps AS (
+    SELECT 
+        patient_id,
+        treatment_row_num,
+        treatment_start,
+        treatment_end,
+        LAG(treatment_end) OVER (PARTITION BY patient_id ORDER BY treatment_start) AS previous_treatment_end
+    FROM TreatmentPeriods
+),
+
+GapsWithCost AS (
+    SELECT 
+        g.patient_id,
+        g.treatment_row_num,
+        g.previous_treatment_end,
+        g.treatment_start,
+        AVG(c.amount) AS avg_cost_in_gap
+    FROM TreatmentGaps g
+    JOIN Claims c ON g.patient_id = c.patient_id
+    WHERE c.claim_date BETWEEN g.previous_treatment_end AND g.treatment_start
+    GROUP BY g.patient_id, g.treatment_row_num, g.previous_treatment_end, g.treatment_start
+)
+
+SELECT * 
+FROM GapsWithCost
+ORDER BY patient_id, treatment_row_num;
